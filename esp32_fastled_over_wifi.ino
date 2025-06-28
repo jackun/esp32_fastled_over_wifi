@@ -278,6 +278,7 @@ void handleMode() {
 
   if (arg0 == "bright") {
     brightness = std::clamp(int(arg1.toInt()), 1, 255);
+    FastLED.setBrightness(brightness);
   }
   server.send(200, "text/plain", "");
 }
@@ -347,7 +348,7 @@ void setup() {
   reset_leds();
   log_d("Show leds");
   // Call the current pattern function once, updating the 'leds' array
-  gPatterns[gCurrentPatternNumber]();
+  //gPatterns[gCurrentPatternNumber]();
   FastLED.show();
   FastLED.delay(1000);
 
