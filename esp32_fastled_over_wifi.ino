@@ -20,32 +20,10 @@ CRGB leds[NUM_LEDS];
 uint8_t * ledsRaw = (uint8_t *)leds;
 uint8_t current_led_num = NUM_LEDS;
 uint8_t demo_reel = 0, brightness = 32;
-
-// A 'magic word' (along with LED count & checksum) precedes each block
-// of LED data; this assists the microcontroller in syncing up with the
-// host-side software and properly issuing the latch (host I/O is
-// likely buffered, making usleep() unreliable for latch).  You may see
-// an initial glitchy frame or two until the two come into alignment.
-// The magic word can be whatever sequence you like, but each character
-// should be unique, and frequent pixel values like 0 and 255 are
-// avoided -- fewer false positives.  The host software will need to
-// generate a compatible header: immediately following the magic word
-// are three bytes: a 16-bit count of the number of LEDs (high byte
-// first) followed by a simple checksum value (high byte XOR low byte
-// XOR 0x55).  LED data follows, 3 bytes per LED, in order R, G, B,
-// where 0 = off and 255 = max brightness.
-
-static const uint8_t magic[] = {
-  'A','d','a'};
-#define MAGICSIZE  sizeof(magic)
-#define HEADERSIZE (MAGICSIZE + 3)
-
-#define MODE_HEADER 0
-#define MODE_DATA   2
+uint8_t rled = 0, bled = 0;
 
 WebServer server(80);
 AsyncUDP udp;
-
 
 /* demoreel start */
 #define FRAMES_PER_SECOND  120
@@ -125,21 +103,21 @@ void nextPattern()
 /* demoreel end */
 
 void reset_leds() {
-  Serial.println("Clear leds");
   FastLED.clear(true);
-  Serial.printf("Add leds %d\n", current_led_num);
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, /*NUM_LEDS*/ current_led_num);
-  Serial.println("memset leds");
   memset(leds, 0,  NUM_LEDS * sizeof(struct CRGB)); //filling Led array by zeroes
-  Serial.println("brightness");
   FastLED.setBrightness(brightness);
-  Serial.println("Reset leds done");
+  log_d("Reset leds done");
 }
 
 void handleRoot() {
-  //digitalWrite(led, 1);
-  server.send(200, "text/plain", "hello from esp32!\n");
-  //digitalWrite(led, 0);
+  server.send(200, "text/plain",
+    "hello from esp32!\n\n"
+    "/s/demo/<0, 1, next> : show FastLED demoreel\n"
+    "/s/leds/<n..128> : number of leds on strip\n"
+    "/s/bright/<1..255> : led brightness\n"
+    "\n"
+  );
 }
 
 void handleNotFound() {
@@ -159,108 +137,7 @@ void handleNotFound() {
   //digitalWrite(led, 0);
 }
 
-File rawFile;
-void handleCreate() {
-  server.send(200, "text/plain", "");
-}
-
-uint8_t mode = MODE_HEADER;
-int32_t bytesRemaining;
-unsigned long
-  startTime,
-  lastByteTime,
-  lastAckTime,
-  t;
-int32_t outPos = 0;
-
-void handleLEDPacket(uint8_t *buffer, int16_t bytesBuffered) {
-  uint8_t i,
-  hi, lo, chk,
-  indexIn       = 0,
-  indexOut      = 0;
-
-  //if (FastLED.size() != current_led_num) {
-  //  reset_leds();
-  //}
-  while (bytesBuffered> 0) {
-    Serial.printf("bytesRemaining: %d, buffered: %d\n", bytesRemaining, bytesBuffered);
-    if (!bytesRemaining && bytesBuffered < 3 * current_led_num + HEADERSIZE) {
-      startTime  = micros();
-      mode       = MODE_HEADER; // Begin next header search
-      FastLED.show();
-      break;
-    }
-    switch(mode) {
-    case MODE_HEADER:
-      // In header-seeking mode.  Is there enough data to check?
-      if(bytesBuffered >= HEADERSIZE) {
-        // Indeed.  Check for a 'magic word' match.
-        for(i=0; (i<MAGICSIZE) && (buffer[indexOut++] == magic[i++]););
-        if(i == MAGICSIZE) {
-          Serial.println("Found header");
-          // Magic word matches.  Now how about the checksum?
-          hi  = buffer[indexOut++];
-          lo  = buffer[indexOut++];
-          chk = buffer[indexOut++];
-          if(chk == (hi ^ lo ^ 0x55)) {
-            Serial.println("Check ok");
-            // Checksum looks valid.  Get 16-bit LED count, add 1
-            // (# LEDs is always > 0) and multiply by 3 for R,G,B.
-            bytesRemaining = 3L * (256L * (long)hi + (long)lo + 1L);
-            bytesBuffered -= 3;
-            outPos = 0;
-            memset(leds, 0,  NUM_LEDS * sizeof(struct CRGB));
-            mode           = MODE_DATA; // Proceed to latch wait mode
-          } 
-          else {
-            // Checksum didn't match; search resumes after magic word.
-            indexOut  -= 3; // Rewind
-          }
-        } // else no header match.  Resume at first mismatched byte.
-        bytesBuffered -= i;
-      }
-      break;
-
-    case MODE_DATA:
-      if(bytesRemaining > 0) {
-        if(bytesBuffered > 0) {
-          if (outPos < sizeof(leds))
-            ledsRaw[outPos++] = buffer[indexOut++];   // Issue next byte
-          bytesBuffered--;
-          bytesRemaining--;
-        }
-        // If serial buffer is threatening to underrun, start
-        // introducing progressively longer pauses to allow more
-        // data to arrive (up to a point).
-      } 
-      else {
-        // End of data -- issue latch:
-        startTime  = micros();
-        mode       = MODE_HEADER; // Begin next header search
-        FastLED.show();
-      }
-    } // end switch
-  }
-}
-
-void handleCreateProcess() {
-  HTTPRaw &raw = server.raw();
-  if (raw.status == RAW_START) {
-    startTime = micros();
-    mode      = MODE_HEADER; // Begin next header search
-    Serial.println("Upload: START");
-  } else if (raw.status == RAW_WRITE) {
-    handleLEDPacket(raw.buf, raw.currentSize);
-    Serial.print("Upload: WRITE, Bytes: ");
-    Serial.println(raw.currentSize);
-  } else if (raw.status == RAW_END) {
-    FastLED.show();
-    Serial.print("Upload: END, Size: ");
-    Serial.println(raw.totalSize);
-  }
-}
-
-void handleMode() {
+void handleSetting() {
   String arg0 = server.pathArg(0);
   String arg1 = server.pathArg(1);
   if (arg0 == "demo") {
@@ -283,31 +160,13 @@ void handleMode() {
   server.send(200, "text/plain", "");
 }
 
-void TaskBlink(void *pvParameters) {
+void TaskWebserver(void *pvParameters) {
   for(;;) {
     server.handleClient();
   }
 }
 
 void udpPacket(AsyncUDPPacket packet) {
-  /*
-  Serial.print("UDP Packet Type: ");
-  Serial.print(packet.isBroadcast() ? "Broadcast" : packet.isMulticast() ? "Multicast" : "Unicast");
-  Serial.print(", From: ");
-  Serial.print(packet.remoteIP());
-  Serial.print(":");
-  Serial.print(packet.remotePort());
-  Serial.print(", To: ");
-  Serial.print(packet.localIP());
-  Serial.print(":");
-  Serial.print(packet.localPort());
-  Serial.print(", Length: ");
-  Serial.print(packet.length());
-  Serial.print(", Data: ");
-  Serial.write(packet.data(), packet.length());
-  Serial.println();
-  */
-
   if (packet.length() > 1) {
     uint8_t *data = packet.data();
     //Serial.printf("Type: %d\n", data[0]);
@@ -323,7 +182,6 @@ void udpPacket(AsyncUDPPacket packet) {
     }
   }
 
-  //handleLEDPacket(packet.data(), packet.length());
   //reply to the client
   //packet.printf("Got %u bytes of data", packet.length());
 }
@@ -356,8 +214,7 @@ void setup() {
   wifi_update();
 
   server.on("/", handleRoot);
-  server.on(UriBraces("/mode/{}/{}"), handleMode);
-  server.on("/leds", HTTP_PUT, handleCreate, handleCreateProcess);
+  server.on(UriBraces("/s/{}/{}"), handleSetting);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.println("HTTP server started");
@@ -367,20 +224,8 @@ void setup() {
   }
 
   log_d("Stack: %d\n", uxTaskGetStackHighWaterMark(NULL));
+  xTaskCreate(TaskWebserver, "WebSrvTask", 4096, nullptr, 2, NULL);
 
-  xTaskCreate(
-    TaskBlink, "Task Blink"  // A name just for humans
-    ,
-    2048 * 2  // The stack size can be checked by calling `uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);`
-    ,
-    nullptr  // Task parameter which can modify the task behavior. This must be passed as pointer to void.
-    ,
-    2  // Priority
-    ,
-    NULL  // Task handle is not used here - simply pass NULL
-  );
-
-  uint8_t rled = 0, bled = 0;
   for (;;){
 
     if (demo_reel == 1)
@@ -419,7 +264,4 @@ void setup() {
 }
 
 void loop() {
-  //server.handleClient();
-  //delay(2);  //allow the cpu to switch to other tasks
 }
-
