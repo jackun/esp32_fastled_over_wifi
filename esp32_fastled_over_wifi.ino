@@ -20,7 +20,7 @@ CRGB leds[NUM_LEDS];
 uint8_t * ledsRaw = (uint8_t *)leds;
 uint8_t current_led_num = NUM_LEDS;
 uint8_t demo_reel = 0, brightness = 32;
-uint8_t rled = 0, bled = 0;
+uint8_t rled = 0, bled = 0, led_brightness = 1;
 
 WebServer server(80);
 AsyncUDP udp;
@@ -112,10 +112,11 @@ void reset_leds() {
 
 void handleRoot() {
   server.send(200, "text/plain",
-    "hello from esp32!\n\n"
-    "/s/demo/<0, 1, next> : show FastLED demoreel\n"
-    "/s/leds/<n..128> : number of leds on strip\n"
-    "/s/bright/<1..255> : led brightness\n"
+    "ESP32 FastLED!\n\n"
+    "/demo/<0, 1, next> : show FastLED demoreel\n"
+    "/leds/<n..128> : number of leds on strip\n"
+    "/bright/<1..255> : led brightness\n"
+    "/led_bright/<0..255> : built-in led brightness\n"
     "\n"
   );
 }
@@ -157,7 +158,13 @@ void handleSetting() {
     brightness = std::clamp(int(arg1.toInt()), 1, 255);
     FastLED.setBrightness(brightness);
   }
-  server.send(200, "text/plain", "");
+
+  if (arg0 == "led_bright") {
+    led_brightness = std::clamp(int(arg1.toInt()), 0, 255);
+  }
+
+  auto str = arg0 + " = " + arg1 + "\n";
+  server.send(200, "text/plain", str.c_str());
 }
 
 void TaskWebserver(void *pvParameters) {
@@ -218,7 +225,7 @@ void setup() {
   wifi_update();
 
   server.on("/", handleRoot);
-  server.on(UriBraces("/s/{}/{}"), handleSetting);
+  server.on(UriBraces("/{}/{}"), handleSetting);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.println("HTTP server started");
@@ -258,7 +265,7 @@ void setup() {
 
     EVERY_N_SECONDS(1){
       bled = rled;
-      rled = rled ? 0 : 32;
+      rled = rled ? 0 : led_brightness;
       rgbLedWrite(MY_BUILTIN_LED, rled, 0, bled);
     };
     EVERY_N_SECONDS(15) {
