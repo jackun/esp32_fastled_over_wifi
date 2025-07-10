@@ -167,19 +167,23 @@ void TaskWebserver(void *pvParameters) {
 }
 
 void udpPacket(AsyncUDPPacket packet) {
-  if (packet.length() > 1) {
+  if (packet.length() >= 3) {
     uint8_t *data = packet.data();
     //Serial.printf("Type: %d\n", data[0]);
     //Serial.printf("Wait: %d\n", data[1]);
-    if (data[0] == 2) {
-      demo_reel = 0;
-      int len = min(packet.length(), 3 * (size_t)current_led_num);
-      while (len > 0) {
-        ledsRaw[len] = data[2 + len];
-        len--;
-      }
-      FastLED.show();
-    }
+    // if (data[0] == 2) {
+    //   demo_reel = 0;
+    //   int len = min(packet.length(), 3 * (size_t)current_led_num);
+    //   while (len > 0) {
+    //     ledsRaw[len] = data[2 + len];
+    //     len--;
+    //   }
+    //   FastLED.show();
+    // }
+
+    size_t len = min(packet.length(), 3 * (size_t)current_led_num);
+    memcpy(ledsRaw, packet.data(), len);
+    FastLED.show();
   }
 
   //reply to the client
